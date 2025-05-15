@@ -1,0 +1,17 @@
+{
+  "name": "frame-ble-wb",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "@types/web-bluetooth": "^0.0.21",
+    "typescript": "^5.8.3"
+  }
+}
