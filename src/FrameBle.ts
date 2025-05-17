@@ -12,6 +12,7 @@ export class FrameBle {
     private readonly TX_CHARACTERISTIC_UUID = "7a230002-5475-a6a4-654c-8431f6ad49c4";
     private readonly RX_CHARACTERISTIC_UUID = "7a230003-5475-a6a4-654c-8431f6ad49c4";
 
+    private maxPayload = 60; // will be set after connection
     private awaitingPrintResponse = false;
     private awaitingDataResponse = false;
     private printTimeoutId?: NodeJS.Timeout;
@@ -84,6 +85,8 @@ export class FrameBle {
 
     `disconnect_handler` can be provided to be called to run
     upon a disconnect.
+
+    MTU size will be queried from the device and maxPayload will be set
     */
     public async connect(
         options: {
@@ -115,7 +118,7 @@ export class FrameBle {
             optionalServices: [this.SERVICE_UUID], // Still good to request optional access
         };
 
-        // The rest of your connect method...
+        // Request device, connect, discover services and characteristics, query device for MTU size
         try {
             this.device = await navigator.bluetooth.requestDevice(deviceOptions);
             if (!this.device) {
@@ -131,6 +134,18 @@ export class FrameBle {
             await this.rxCharacteristic.startNotifications();
 
             this.rxCharacteristic.addEventListener('characteristicvaluechanged', this.notificationHandler);
+
+            var mtuString = await this.sendLua("print(frame.bluetooth.max_length())", {awaitPrint: true});
+            if (mtuString === undefined || mtuString === null) {
+                throw new Error("Failed to get MTU size from device.");
+            } else {
+                var mtu = parseInt(mtuString);
+                if (isNaN(mtu) || mtu <= 0) {
+                    throw new Error("Invalid MTU size received from device.");
+                } else {
+                    this.maxPayload = mtu;
+                }
+            }
 
             return this.device.id || this.device.name; // Return device ID or name
         } catch (error) {
@@ -174,33 +189,32 @@ export class FrameBle {
      *  Returns the maximum payload size for Lua strings or raw data.
      *  The size is based on the MTU size of the Bluetooth connection.
      *
-     *  For Lua strings, the size is reduced by 3 bytes for the Lua command overhead.
-     *  For raw data, the size is reduced by 4 bytes for the prefix byte.
+     *  For Lua strings, the size is the full max payload.
+     *  For raw data, the size is reduced by 1 bytes for the prefix byte 0x01.
      *
      * @param isLua If true, returns the max payload size for Lua strings. Otherwise, for raw data.
      * @returns Maximum payload size in bytes
      */
     public getMaxPayload(isLua: boolean): number {
-        const estimatedMaxWrite = 243; // TODO - Get the actual MTU size from the device
-        return isLua ? estimatedMaxWrite - 3 : estimatedMaxWrite - 4;
+        return isLua ? this.maxPayload : this.maxPayload - 1;
     }
 
     private async transmit(data: Uint8Array<ArrayBufferLike>, showMe = false) {
         if (!this.txCharacteristic) {
             throw new Error("Not connected or TX characteristic not available.");
         }
-        if (data.byteLength > 512) { // A common practical limit for a single write
-            console.warn("Payload length is large, browser/OS will handle fragmentation if supported.");
+        if (data.byteLength > this.getMaxPayload(true)) {
+            throw new Error("Payload length: " + data.byteLength + " exceeds maximum size: " + this.getMaxPayload(true));
         }
         if (showMe) {
             console.log("Transmitting (hex):", Array.from(new Uint8Array(data)).map(b => b.toString(16).padStart(2, '0')).join(' '));
         }
-        await this.txCharacteristic.writeValueWithResponse(data); // Or writeValueWithoutResponse
+        await this.txCharacteristic.writeValueWithResponse(data);
     }
 
     /**
      *  Sends a Lua string to the device. The string length must be less than or
-     *  equal to `max_lua_payload()`.
+     *  equal to `maxPayload(true)`.
      *
      * @param str the Lua string to execute on Frame
      * @param showMe If `show_me=True`, the exact bytes send to the device will be printed.
@@ -256,7 +270,7 @@ export class FrameBle {
 
     /**
      *  Sends raw data to the device. The payload length must be less than or
-     *  equal to `max_data_payload()`.
+     *  equal to `maxPayload(false)`.
      *
      *  If `await_data=True`, the function will block until a data response
      *  occurs, or a timeout.
@@ -281,7 +295,7 @@ export class FrameBle {
         if (!this.txCharacteristic) {
             throw new Error("Not connected or TX characteristic not available.");
         }
-        if (data.byteLength > this.getMaxPayload(false)) { // Python uses max_data_payload which is mtu - 4
+        if (data.byteLength > this.getMaxPayload(false)) {
             throw new Error("Data payload is too large for a single packet.");
         }
 
