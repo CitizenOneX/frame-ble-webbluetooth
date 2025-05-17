@@ -2,11 +2,32 @@
 <html>
   <head>
     <title>FrameBle Examples</title>
+
+    <script type="module">
+        async function runExample(exampleName) {
+          try {
+            const module = await import(/* @vite-ignore */ `./${exampleName}.js`);
+            if (module && module.run) {
+              module.run();
+            } else {
+              console.error(`Module ${exampleName}.js does not have a 'run' function.`);
+            }
+          } catch (error) {
+            console.error('Failed to load example:', error);
+          }
+        }
+
+        // Make runExample globally accessible
+        window.runExample = runExample;
+    </script>
   </head>
+
   <body>
     <h1>FrameBle Examples</h1>
     <ul>
-      <li><a href="./hello_world.html">Hello, World!</a></li>
+      <li>
+        <button onclick="runExample('hello_world')">Hello, World!</button>
+      </li>
     </ul>
-  </body>
+    </body>
 </html>

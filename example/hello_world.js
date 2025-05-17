@@ -1,6 +1,6 @@
 import { FrameBle } from 'frame-ble';
 
-document.getElementById('run').onclick = async () => {
+export async function run() {
   console.log("Instantiating FrameBle...");
   const frameBle = new FrameBle();
 
