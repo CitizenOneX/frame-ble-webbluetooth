@@ -170,23 +170,20 @@ export class FrameBle {
         return this.device !== undefined && this.device.gatt !== undefined && this.device.gatt.connected;
     }
 
-    // MTU size isn't directly queryable in Web Bluetooth.
-    // Writes are often limited to around 512 bytes for the ATT_MTU,
-    // but the actual characteristic write limit might be smaller.
-    // For characteristic.writeValue, it's often ~512 bytes.
-    // For characteristic.writeValueWithoutResponse, it's often MTU - 3 (e.g. 20 bytes for default MTU).
-    // You'll need to test this with your specific device.
-    // Let's assume a conservative value or make it configurable if necessary.
+    /**
+     *  Returns the maximum payload size for Lua strings or raw data.
+     *  The size is based on the MTU size of the Bluetooth connection.
+     *
+     *  For Lua strings, the size is reduced by 3 bytes for the Lua command overhead.
+     *  For raw data, the size is reduced by 4 bytes for the prefix byte.
+     *
+     * @param isLua If true, returns the max payload size for Lua strings. Otherwise, for raw data.
+     * @returns Maximum payload size in bytes
+     */
     public getMaxPayload(isLua: boolean): number {
-        // This is a rough estimate. The actual limit depends on the negotiated MTU.
-        // The Web Bluetooth API doesn't expose MTU directly.
-        // Writing larger values might work as the browser/OS handles fragmentation.
-        // Typical max ATT_MTU is 517, so data part is 512.
-        // For writes with response, the limit is often the full 512.
-        const estimatedMaxWrite = 500; // Conservative estimate
-        return isLua ? estimatedMaxWrite - 3 : estimatedMaxWrite - 4; // Matching Python logic for overhead
+        const estimatedMaxWrite = 243; // TODO - Get the actual MTU size from the device
+        return isLua ? estimatedMaxWrite - 3 : estimatedMaxWrite - 4;
     }
-
 
     private async transmit(data: Uint8Array<ArrayBufferLike>, showMe = false) {
         if (!this.txCharacteristic) {
@@ -271,7 +268,16 @@ export class FrameBle {
      * @param timeout in ms
      * @returns
      */
-    public async sendData(data: ArrayBuffer, showMe = false, awaitData = false, timeout = 5000): Promise<DataView<ArrayBufferLike> | void> {
+    public async sendData(
+        data: Uint8Array,
+        options: {
+            showMe?: boolean;
+            awaitData?: boolean;
+            timeout?: number;
+        } = {}
+    ): Promise<DataView<ArrayBufferLike> | void> {
+        const { showMe = false, awaitData = false, timeout = 5000 } = options;
+
         if (!this.txCharacteristic) {
             throw new Error("Not connected or TX characteristic not available.");
         }
@@ -447,7 +453,7 @@ export class FrameBle {
      * @param payload Data to be sent
      * @param showMe If true, the exact bytes send to the device will be printed
      */
-    public async sendMessage(msgCode: number, payload: ArrayBuffer, showMe = false): Promise<void> {
+    public async sendMessage(msgCode: number, payload: Uint8Array, showMe = false): Promise<void> {
         const HEADER_SIZE = 3; // msg_code(1), size_high(1), size_low(1)
         const SUBSEQUENT_HEADER_SIZE = 1; // just msg_code
         const MAX_TOTAL_SIZE = 65535; // 2^16 - 1
@@ -471,7 +477,6 @@ export class FrameBle {
         }
 
         let sentBytes = 0;
-        const payloadBytes = new Uint8Array(payload);
 
         // Send first chunk
         const firstChunkDataSize = Math.min(maxFirstChunkDataSize, totalSize);
@@ -479,9 +484,9 @@ export class FrameBle {
         firstPacket[0] = msgCode;
         firstPacket[1] = totalSize >> 8;    // size_high
         firstPacket[2] = totalSize & 0xFF;  // size_low
-        firstPacket.set(payloadBytes.subarray(0, firstChunkDataSize), HEADER_SIZE);
+        firstPacket.set(payload.subarray(0, firstChunkDataSize), HEADER_SIZE);
 
-        await this.sendData(firstPacket.buffer.slice(firstPacket.byteOffset, firstPacket.byteOffset + firstPacket.byteLength), showMe, true); // Slice to get correct ArrayBuffer
+        await this.sendData(firstPacket.slice(firstPacket.byteOffset, firstPacket.byteOffset + firstPacket.byteLength), {showMe: showMe, awaitData: true}); // Slice to get correct ArrayBuffer
         sentBytes += firstChunkDataSize;
 
         // Send remaining chunks
@@ -490,9 +495,9 @@ export class FrameBle {
             const currentChunkDataSize = Math.min(maxSubsequentChunkDataSize, remaining);
             const subsequentPacket = new Uint8Array(SUBSEQUENT_HEADER_SIZE + currentChunkDataSize);
             subsequentPacket[0] = msgCode;
-            subsequentPacket.set(payloadBytes.subarray(sentBytes, sentBytes + currentChunkDataSize), SUBSEQUENT_HEADER_SIZE);
+            subsequentPacket.set(payload.subarray(sentBytes, sentBytes + currentChunkDataSize), SUBSEQUENT_HEADER_SIZE);
 
-            await this.sendData(subsequentPacket.buffer.slice(subsequentPacket.byteOffset, subsequentPacket.byteOffset + subsequentPacket.byteLength), showMe, true); // Slice to get correct ArrayBuffer
+            await this.sendData(subsequentPacket.slice(subsequentPacket.byteOffset, subsequentPacket.byteOffset + subsequentPacket.byteLength), {showMe: showMe, awaitData: true}); // Slice to get correct ArrayBuffer
             sentBytes += currentChunkDataSize;
         }
     }
