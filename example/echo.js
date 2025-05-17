@@ -1,10 +1,6 @@
 import { FrameBle } from 'frame-ble';
 
 export async function run() {
-  window.addEventListener('unhandledrejection', event => {
-    console.error('Unhandled rejection:', event.reason);
-  });
-
   const frameBle = new FrameBle();
 
   // Configure print response handler to show Frame output
