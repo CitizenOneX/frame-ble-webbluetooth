@@ -135,6 +135,12 @@ export class FrameBle {
 
             this.rxCharacteristic.addEventListener('characteristicvaluechanged', this.notificationHandler);
 
+            // TODO send a break signal to the device first to allow the print() statement
+            // to execute in case the device is running a main loop
+            // TODO allow a noMTU option on connect to skip the MTU query if the caller
+            // has an app-specific message to query the device for the MTU size
+            // and doesn't want to send a break signal
+
             var mtuString = await this.sendLua("print(frame.bluetooth.max_length())", {awaitPrint: true});
             if (mtuString === undefined || mtuString === null) {
                 throw new Error("Failed to get MTU size from device.");
