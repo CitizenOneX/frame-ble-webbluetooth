@@ -1,17 +1,25 @@
 {
-  "name": "frame-ble-wb",
-  "version": "1.0.0",
-  "main": "index.js",
+  "name": "frame-ble",
+  "version": "0.1.0",
+  "main": "dist/frame-ble.umd.js",
+  "module": "dist/frame-ble.es.js",
+  "types": "dist/index.d.ts",
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "dev:demo": "vite --config example/vite.config.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "author": "CitizenOne",
+  "license": "BSD-3-Clause",
+  "description": "Package for managing a connection to and transferring data to and from the Brilliant Labs Frame device over Bluetooth LE using WebBluetooth",
   "devDependencies": {
     "@types/node": "^22.15.17",
     "@types/web-bluetooth": "^0.0.21",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vite-plugin-dts": "^4.5.4"
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Class for managing a connection and transferring data to and from
+ * Class for managing a connection to and transferring data to and from
  * the Brilliant Labs Frame device over Bluetooth LE using WebBluetooth
  */
 export class FrameBle {
@@ -16,10 +16,10 @@ export class FrameBle {
     private awaitingDataResponse = false;
     private printResponsePromise?: Promise<string>;
     private printResolve?: (value: string) => void;
-    private dataResponsePromise?: Promise<ArrayBuffer>;
-    private dataResolve?: (value: ArrayBuffer) => void;
+    private dataResponsePromise?: Promise<DataView<ArrayBufferLike>>;
+    private dataResolve?: (value: DataView<ArrayBufferLike>) => void;
 
-    private onDataResponse?: (data: ArrayBuffer) => void | Promise<void>;
+    private onDataResponse?: (data: DataView<ArrayBufferLike>) => void | Promise<void>;
     private onPrintResponse?: (data: string) => void | Promise<void>;
     private onDisconnectHandler?: () => void;
 
@@ -40,10 +40,10 @@ export class FrameBle {
         const value = characteristic.value; // This is a DataView
         if (!value) return;
 
-        const dataArrayBuffer = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength); // Get the underlying ArrayBuffer
-
         if (value.getUint8(0) === 1) { // Data response
-            const actualData = dataArrayBuffer.slice(1);
+            // get a new dataview of the data from byte 1 to the end
+            // (without using slice, that potentially returns a SharedArrayBuffer)
+            const actualData = new DataView(value.buffer, value.byteOffset + 1, value.byteLength - 1);
             if (this.awaitingDataResponse && this.dataResolve) {
                 this.awaitingDataResponse = false;
                 this.dataResolve(actualData);
@@ -55,7 +55,7 @@ export class FrameBle {
                 }
             }
         } else { // Print response (string)
-            const decodedString = new TextDecoder().decode(dataArrayBuffer);
+            const decodedString = new TextDecoder().decode(value);
             if (this.awaitingPrintResponse && this.printResolve) {
                 this.awaitingPrintResponse = false;
                 this.printResolve(decodedString);
@@ -90,7 +90,7 @@ export class FrameBle {
             namePrefix?: string;
             // timeout?: number; // Timeout for requestDevice is browser-handled
             printResponseHandler?: (data: string) => void | Promise<void>;
-            dataResponseHandler?: (data: ArrayBuffer) => void | Promise<void>;
+            dataResponseHandler?: (data: DataView<ArrayBufferLike>) => void | Promise<void>;
             disconnectHandler?: () => void;
         } = {}
     ): Promise<string | undefined> {
@@ -187,7 +187,7 @@ export class FrameBle {
     }
 
 
-    private async transmit(data: ArrayBuffer, showMe = false) {
+    private async transmit(data: Uint8Array<ArrayBufferLike>, showMe = false) {
         if (!this.txCharacteristic) {
             throw new Error("Not connected or TX characteristic not available.");
         }
@@ -229,7 +229,7 @@ export class FrameBle {
             });
         }
 
-        await this.transmit(encodedString.buffer, showMe);
+        await this.transmit(encodedString, showMe);
 
         if (awaitPrint) {
             return this.printResponsePromise;
@@ -250,7 +250,7 @@ export class FrameBle {
      * @param timeout in ms
      * @returns
      */
-    public async sendData(data: ArrayBuffer, showMe = false, awaitData = false, timeout = 5000): Promise<ArrayBuffer | void> {
+    public async sendData(data: ArrayBuffer, showMe = false, awaitData = false, timeout = 5000): Promise<DataView<ArrayBufferLike> | void> {
         if (!this.txCharacteristic) {
             throw new Error("Not connected or TX characteristic not available.");
         }
@@ -276,7 +276,7 @@ export class FrameBle {
             });
         }
 
-        await this.transmit(combinedData.buffer, showMe);
+        await this.transmit(combinedData, showMe);
 
         if (awaitData) {
             return this.dataResponsePromise;
@@ -290,7 +290,7 @@ export class FrameBle {
      */
     public async sendResetSignal(showMe = false): Promise<void> {
         const signal = new Uint8Array([0x04]);
-        await this.transmit(signal.buffer, showMe);
+        await this.transmit(signal, showMe);
         // Give it a moment after the Lua VM reset
         await new Promise(resolve => setTimeout(resolve, 200));
     }
@@ -302,7 +302,7 @@ export class FrameBle {
      */
     public async sendBreakSignal(showMe = false): Promise<void> {
         const signal = new Uint8Array([0x03]);
-        await this.transmit(signal.buffer, showMe);
+        await this.transmit(signal, showMe);
         // Give it a moment after the break
         await new Promise(resolve => setTimeout(resolve, 200));
     }
