@@ -12,7 +12,7 @@ export async function run() {
   // Web Bluetooth API requires a user gesture to initiate the connection
   // This is usually a button click or similar event
   console.log("Connecting to Frame...");
-  const deviceId = await frameBle.connect({namePrefix: "Frame", printResponseHandler: printHandler});
+  const deviceId = await frameBle.connect({printResponseHandler: printHandler});
   console.log('Connected to:', deviceId);
 
   // Send a break signal to the Frame in case it is in a loop

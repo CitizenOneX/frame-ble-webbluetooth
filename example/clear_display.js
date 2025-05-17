@@ -9,7 +9,7 @@ export async function run() {
   };
 
   // Connct to Frame
-  const deviceId = await frameBle.connect({namePrefix: "Frame", printResponseHandler: printHandler});
+  const deviceId = await frameBle.connect({printResponseHandler: printHandler});
 
   // Send a break signal to Frame in case it is in a loop/main.lua
   await frameBle.sendBreakSignal({showMe: true});
