@@ -21,6 +21,7 @@ export async function run() {
   // Frame Lua API is available in these commands; see https://docs.brilliant.xyz/frame/building-apps-lua/
   await frameBle.sendLua("print(frame.FIRMWARE_VERSION)", {awaitPrint: true});
   await frameBle.sendLua("print(frame.battery_level())", {awaitPrint: true});
+  await frameBle.sendLua("print(frame.bluetooth.max_length())", {awaitPrint: true});
 
   // "Returns the amount of memory currently used by the program in Kilobytes."
   await frameBle.sendLua("print(collectgarbage('count'))", {awaitPrint: true});
