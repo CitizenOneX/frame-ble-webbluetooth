@@ -15,6 +15,11 @@ document.getElementById('run').onclick = async () => {
   const deviceId = await frameBle.connect({namePrefix: "Frame", printResponseHandler: printHandler});
   console.log('Connected to:', deviceId);
 
+  // Send a break signal to the Frame in case it is in a loop
+  console.log("Sending break signal to Frame...");
+  await frameBle.sendBreakSignal({showMe: true});
+  console.log("Break signal sent.");
+
   // Send Lua command to Frame
   console.log("Sending Lua command to Frame...");
   var luaCommand = "frame.display.text('Hello, Frame!', 1, 1)frame.display.show()print('Response from Frame!')";
