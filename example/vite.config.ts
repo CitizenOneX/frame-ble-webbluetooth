@@ -10,10 +10,10 @@ export default defineConfig({
   resolve: {
     alias: {
       // Option A: Use built library
-      'frame-ble': path.resolve(__dirname, '../dist/frame-ble.es.js'),
+      //'frame-ble': path.resolve(__dirname, '../dist/frame-ble.es.js'),
 
-      // Option B (uncomment to use source code instead of built bundle)
-      // 'frame-ble': path.resolve(__dirname, '../src/index.ts'),
+      // Option B Use source code instead of built bundle
+      'frame-ble': path.resolve(__dirname, '../src/index.ts'),
     },
   },
 });

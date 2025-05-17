@@ -14,6 +14,7 @@ export class FrameBle {
 
     private awaitingPrintResponse = false;
     private awaitingDataResponse = false;
+    private printTimeoutId?: NodeJS.Timeout;
     private printResponsePromise?: Promise<string>;
     private printResolve?: (value: string) => void;
     private dataResponsePromise?: Promise<DataView<ArrayBufferLike>>;
@@ -61,8 +62,8 @@ export class FrameBle {
                 this.printResolve(decodedString);
             }
             if (this.onPrintResponse) {
-                 const result = this.onPrintResponse(decodedString);
-                 if (result instanceof Promise) {
+                const result = this.onPrintResponse(decodedString);
+                if (result instanceof Promise) {
                     result.catch(console.error);
                 }
             }
@@ -156,7 +157,7 @@ export class FrameBle {
      */
     public async disconnect() {
         if (this.device && this.device.gatt?.connected) {
-            await this.device.gatt.disconnect();
+            this.device.gatt.disconnect();
         }
         // The event listener 'gattserverdisconnected' will call handleDisconnect
     }
@@ -210,29 +211,49 @@ export class FrameBle {
      * @param timeout in ms
      * @returns
      */
-    public async sendLua(str: string, showMe = false, awaitPrint = false, timeout = 5000): Promise<string | void> {
+    public async sendLua(
+        str: string,
+        options: {
+            showMe?: boolean;
+            awaitPrint?: boolean;
+            timeout?: number;
+        } = {}
+    ): Promise<string | void> {
+        const { showMe = false, awaitPrint = false, timeout = 5000 } = options;
+
         const encodedString = new TextEncoder().encode(str); // Returns Uint8Array, which is an ArrayBufferView
         if (encodedString.buffer.byteLength > this.getMaxPayload(true)) {
              throw new Error("Lua string payload is too large.");
         }
 
         if (awaitPrint) {
+            // Clear any existing timeout
+            if (this.printTimeoutId) {
+                clearTimeout(this.printTimeoutId);
+            }
+
             this.awaitingPrintResponse = true;
-            this.printResponsePromise = new Promise((resolve, reject) => {
+            this.printResponsePromise = new Promise<string>((resolve, reject) => {
                 this.printResolve = resolve;
-                setTimeout(() => {
+                this.printTimeoutId = setTimeout(() => {
                     if (this.awaitingPrintResponse) {
                         this.awaitingPrintResponse = false;
+                        this.printResolve = undefined;
                         reject(new Error("Device didn't respond with a print within timeout."));
                     }
                 }, timeout);
+            }).finally(() => {
+                if (this.printTimeoutId) {
+                    clearTimeout(this.printTimeoutId);
+                    this.printTimeoutId = undefined;
+                }
             });
         }
 
         await this.transmit(encodedString, showMe);
 
         if (awaitPrint) {
-            return this.printResponsePromise;
+            return await this.printResponsePromise;
         }
     }
 
@@ -323,7 +344,7 @@ export class FrameBle {
                                   .replace(/"/g, '\\"');
 
         // Open the file on the frame
-        const openResponse = await this.sendLua(`f=frame.file.open('${frameFilePath}','w');print(1)`, false, true);
+        const openResponse = await this.sendLua(`f=frame.file.open('${frameFilePath}','w');print(1)`, {showMe: false, awaitPrint: true});
         if (openResponse !== "1") {
             throw new Error(`Failed to open file ${frameFilePath} on device. Response: ${openResponse}`);
         }
@@ -378,7 +399,7 @@ export class FrameBle {
             }
 
 
-            const writeResponse = await this.sendLua(`f:write("${chunk}");print(1)`, false, true);
+            const writeResponse = await this.sendLua(`f:write("${chunk}");print(1)`, {showMe: false, awaitPrint: true});
             if (writeResponse !== "1") {
                 throw new Error(`Failed to write chunk to ${frameFilePath}. Response: ${writeResponse}`);
             }
@@ -386,7 +407,7 @@ export class FrameBle {
         }
 
         // Close the file
-        const closeResponse = await this.sendLua("f:close();print(nil)", false, true);
+        const closeResponse = await this.sendLua("f:close();print(nil)", {showMe: false, awaitPrint: true});
         // print(nil) results in an empty string or specific device response for nil.
         // The python code expects "None" or "" or specific response.
         // For WebBluetooth, an empty string is common for `print(nil)`.
