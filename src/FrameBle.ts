@@ -21,11 +21,40 @@ export class FrameBle {
     private dataResponsePromise?: Promise<DataView<ArrayBufferLike>>;
     private dataResolve?: (value: DataView<ArrayBufferLike>) => void;
 
+    // Handler properties remain private
     private onDataResponse?: (data: DataView<ArrayBufferLike>) => void | Promise<void>;
     private onPrintResponse?: (data: string) => void | Promise<void>;
     private onDisconnectHandler?: () => void;
 
     constructor() {}
+
+    /**
+     * Sets or updates the handler for asynchronous data responses from the device.
+     * @param handler The function to call when data is received.
+     * Pass undefined to remove the current handler.
+     */
+    public setDataResponseHandler(handler: ((data: DataView<ArrayBufferLike>) => void | Promise<void>) | undefined): void {
+        this.onDataResponse = handler;
+    }
+
+    /**
+     * Sets or updates the handler for asynchronous print (string) responses from the device.
+     * @param handler The function to call when a print string is received.
+     * Pass undefined to remove the current handler.
+     */
+    public setPrintResponseHandler(handler: ((data: string) => void | Promise<void>) | undefined): void {
+        this.onPrintResponse = handler;
+    }
+
+    /**
+     * Sets or updates the handler for disconnection events.
+     * @param handler The function to call when the device disconnects.
+     * Pass undefined to remove the current handler.
+     */
+    public setDisconnectHandler(handler: (() => void) | undefined): void {
+        this.onDisconnectHandler = handler;
+    }
+
 
     private handleDisconnect = () => {
         this.device = undefined;
@@ -43,13 +72,12 @@ export class FrameBle {
         if (!value) return;
 
         if (value.getUint8(0) === 1) { // Data response
-            // get a new dataview of the data from byte 1 to the end
-            // (without using slice, that potentially returns a SharedArrayBuffer)
             const actualData = new DataView(value.buffer, value.byteOffset + 1, value.byteLength - 1);
             if (this.awaitingDataResponse && this.dataResolve) {
                 this.awaitingDataResponse = false;
                 this.dataResolve(actualData);
             }
+            // Use the potentially updated handler
             if (this.onDataResponse) {
                 const result = this.onDataResponse(actualData);
                 if (result instanceof Promise) {
@@ -62,6 +90,7 @@ export class FrameBle {
                 this.awaitingPrintResponse = false;
                 this.printResolve(decodedString);
             }
+            // Use the potentially updated handler
             if (this.onPrintResponse) {
                 const result = this.onPrintResponse(decodedString);
                 if (result instanceof Promise) {
@@ -72,27 +101,13 @@ export class FrameBle {
     }
 
     /**
-    Connects to the first Frame device discovered,
-    optionally matching a specified name e.g. "Frame AB",
-    or throws an Exception if a matching Frame is not found within timeout seconds.
-
-    `name` can optionally be provided as the local name containing the
-    2 digit ID shown on Frame, in order to only connect to that specific device.
-    The value should be a string, for example `"Frame 4F"`
-
-    `print_response_handler` and `data_response_handler` can be provided and
-    will be called whenever data arrives from the device asynchronously.
-
-    `disconnect_handler` can be provided to be called to run
-    upon a disconnect.
-
-    MTU size will be queried from the device and maxPayload will be set
+    Connects to the first Frame device discovered.
+    Handlers can be provided here or set dynamically using setter methods.
     */
     public async connect(
         options: {
             name?: string;
             namePrefix?: string;
-            // timeout?: number; // Timeout for requestDevice is browser-handled
             printResponseHandler?: (data: string) => void | Promise<void>;
             dataResponseHandler?: (data: DataView<ArrayBufferLike>) => void | Promise<void>;
             disconnectHandler?: () => void;
@@ -102,11 +117,17 @@ export class FrameBle {
             throw new Error("Web Bluetooth API not available.");
         }
 
-        this.onPrintResponse = options.printResponseHandler;
-        this.onDataResponse = options.dataResponseHandler;
-        this.onDisconnectHandler = options.disconnectHandler;
+        // Set handlers if provided in options, otherwise they might have been set by setters
+        if (options.printResponseHandler) {
+            this.onPrintResponse = options.printResponseHandler;
+        }
+        if (options.dataResponseHandler) {
+            this.onDataResponse = options.dataResponseHandler;
+        }
+        if (options.disconnectHandler) {
+            this.onDisconnectHandler = options.disconnectHandler;
+        }
 
-        // Create the filter with all properties at once
         const baseFilter: BluetoothLEScanFilter = options.name
             ? { services: [this.SERVICE_UUID], name: options.name }
             : options.namePrefix
@@ -114,11 +135,10 @@ export class FrameBle {
                 : { services: [this.SERVICE_UUID] };
 
         const deviceOptions: RequestDeviceOptions = {
-            filters: [baseFilter], // Use the constructed filter
-            optionalServices: [this.SERVICE_UUID], // Still good to request optional access
+            filters: [baseFilter],
+            optionalServices: [this.SERVICE_UUID],
         };
 
-        // Request device, connect, discover services and characteristics, query device for MTU size
         try {
             this.device = await navigator.bluetooth.requestDevice(deviceOptions);
             if (!this.device) {
@@ -135,40 +155,48 @@ export class FrameBle {
 
             this.rxCharacteristic.addEventListener('characteristicvaluechanged', this.notificationHandler);
 
-            // TODO send a break signal to the device first to allow the print() statement
-            // to execute in case the device is running a main loop
-            // TODO allow a noMTU option on connect to skip the MTU query if the caller
-            // has an app-specific message to query the device for the MTU size
-            // and doesn't want to send a break signal
+            // Send a break signal to clear any existing Lua state that might interfere with MTU query
+            // This is a common practice before critical operations like MTU negotiation
+            // to ensure the device's REPL is in a known state.
+            await this.sendBreakSignal(false); // showMe = false
 
-            var mtuString = await this.sendLua("print(frame.bluetooth.max_length())", {awaitPrint: true});
+            // Query MTU size
+            const mtuString = await this.sendLua("print(frame.bluetooth.max_length())", {awaitPrint: true});
             if (mtuString === undefined || mtuString === null) {
                 throw new Error("Failed to get MTU size from device.");
             } else {
-                var mtu = parseInt(mtuString);
+                const mtu = parseInt(mtuString);
                 if (isNaN(mtu) || mtu <= 0) {
-                    throw new Error("Invalid MTU size received from device.");
+                    throw new Error(`Invalid MTU size received: '${mtuString}'`);
                 } else {
                     this.maxPayload = mtu;
                 }
             }
 
-            return this.device.id || this.device.name; // Return device ID or name
+            return this.device.id || this.device.name || "Unknown Device";
         } catch (error) {
             console.error("Connection failed:", error);
-            // Clean up listeners if connection fails partway
             if (this.device) {
                 this.device.removeEventListener('gattserverdisconnected', this.handleDisconnect);
+                if (this.device.gatt?.connected) {
+                    this.device.gatt.disconnect(); // Attempt to disconnect if partially connected
+                }
             }
             if (this.rxCharacteristic) {
-                // Attempt to stop notifications if started, though this might also fail if device is gone
                 try {
-                    await this.rxCharacteristic.stopNotifications();
+                    if (this.device?.gatt?.connected) { // Only if still connected
+                         await this.rxCharacteristic.stopNotifications();
+                    }
                 } catch (stopNotificationError) {
                     // console.warn("Could not stop notifications on failed connect:", stopNotificationError);
                 }
                 this.rxCharacteristic.removeEventListener('characteristicvaluechanged', this.notificationHandler);
             }
+            // Reset internal state
+            this.device = undefined;
+            this.server = undefined;
+            this.txCharacteristic = undefined;
+            this.rxCharacteristic = undefined;
             throw error;
         }
     }
@@ -179,12 +207,15 @@ export class FrameBle {
     public async disconnect() {
         if (this.device && this.device.gatt?.connected) {
             this.device.gatt.disconnect();
+            // The 'gattserverdisconnected' event listener will call handleDisconnect
+            // and perform further cleanup.
+        } else {
+            // If not connected but state might be inconsistent, ensure cleanup
+            this.handleDisconnect();
         }
-        // The event listener 'gattserverdisconnected' will call handleDisconnect
     }
 
     /**
-     *
      * @returns `true` if the device is connected. `false` otherwise.
      */
     public isConnected(): boolean {
@@ -192,41 +223,37 @@ export class FrameBle {
     }
 
     /**
-     *  Returns the maximum payload size for Lua strings or raw data.
-     *  The size is based on the MTU size of the Bluetooth connection.
-     *
-     *  For Lua strings, the size is the full max payload.
-     *  For raw data, the size is reduced by 1 bytes for the prefix byte 0x01.
-     *
+     * Returns the maximum payload size for Lua strings or raw data.
      * @param isLua If true, returns the max payload size for Lua strings. Otherwise, for raw data.
      * @returns Maximum payload size in bytes
      */
     public getMaxPayload(isLua: boolean): number {
+        // For raw data, 1 byte is used for the prefix 0x01.
         return isLua ? this.maxPayload : this.maxPayload - 1;
     }
 
-    private async transmit(data: Uint8Array<ArrayBufferLike>, showMe = false) {
+    private async transmit(data: Uint8Array, showMe = false) {
         if (!this.txCharacteristic) {
             throw new Error("Not connected or TX characteristic not available.");
         }
-        if (data.byteLength > this.getMaxPayload(true)) {
-            throw new Error("Payload length: " + data.byteLength + " exceeds maximum size: " + this.getMaxPayload(true));
+        // Max payload for transmit should be the raw MTU (this.maxPayload)
+        // as getMaxPayload(true) or getMaxPayload(false) is about what *we* can fit *into* a Lua string or data packet
+        // not the raw characteristic write limit. The BLE stack handles fragmentation if data > MTU,
+        // but we are trying to send application-level packets that fit within one BLE packet.
+        if (data.byteLength > this.maxPayload) { // Check against raw maxPayload
+            throw new Error(`Payload length: ${data.byteLength} exceeds maximum BLE packet size: ${this.maxPayload}`);
         }
         if (showMe) {
-            console.log("Transmitting (hex):", Array.from(new Uint8Array(data)).map(b => b.toString(16).padStart(2, '0')).join(' '));
+            console.log("Transmitting (hex):", Array.from(data).map(b => b.toString(16).padStart(2, '0')).join(' '));
         }
         await this.txCharacteristic.writeValueWithResponse(data);
     }
 
     /**
-     *  Sends a Lua string to the device. The string length must be less than or
-     *  equal to `maxPayload(true)`.
-     *
+     * Sends a Lua string to the device.
      * @param str the Lua string to execute on Frame
-     * @param showMe If `show_me=True`, the exact bytes send to the device will be printed.
-     * @param awaitPrint If `await_print=True`, the function will block until a Lua print() occurs, or a timeout.
-     * @param timeout in ms
-     * @returns
+     * @param options Configuration for sending the Lua string.
+     * @returns A promise that resolves with the print response if awaitPrint is true, or void otherwise.
      */
     public async sendLua(
         str: string,
@@ -238,28 +265,27 @@ export class FrameBle {
     ): Promise<string | void> {
         const { showMe = false, awaitPrint = false, timeout = 5000 } = options;
 
-        const encodedString = new TextEncoder().encode(str); // Returns Uint8Array, which is an ArrayBufferView
-        if (encodedString.buffer.byteLength > this.getMaxPayload(true)) {
-             throw new Error("Lua string payload is too large.");
+        const encodedString = new TextEncoder().encode(str);
+        if (encodedString.byteLength > this.getMaxPayload(true)) { // getMaxPayload(true) is correct here
+             throw new Error(`Lua string payload (${encodedString.byteLength} bytes) is too large for max Lua payload (${this.getMaxPayload(true)} bytes).`);
         }
 
         if (awaitPrint) {
-            // Clear any existing timeout
             if (this.printTimeoutId) {
                 clearTimeout(this.printTimeoutId);
             }
 
             this.awaitingPrintResponse = true;
             this.printResponsePromise = new Promise<string>((resolve, reject) => {
-                this.printResolve = resolve;
+                this.printResolve = resolve; // Store resolve to be called by notificationHandler
                 this.printTimeoutId = setTimeout(() => {
-                    if (this.awaitingPrintResponse) {
+                    if (this.awaitingPrintResponse) { // Check if still awaiting
                         this.awaitingPrintResponse = false;
-                        this.printResolve = undefined;
-                        reject(new Error("Device didn't respond with a print within timeout."));
+                        this.printResolve = undefined; // Clear resolver
+                        reject(new Error(`Device didn't respond with a print within ${timeout}ms.`));
                     }
                 }, timeout);
-            }).finally(() => {
+            }).finally(() => { // Cleanup timeout regardless of promise outcome
                 if (this.printTimeoutId) {
                     clearTimeout(this.printTimeoutId);
                     this.printTimeoutId = undefined;
@@ -270,26 +296,18 @@ export class FrameBle {
         await this.transmit(encodedString, showMe);
 
         if (awaitPrint) {
-            return await this.printResponsePromise;
+            return this.printResponsePromise;
         }
     }
 
     /**
-     *  Sends raw data to the device. The payload length must be less than or
-     *  equal to `maxPayload(false)`.
-     *
-     *  If `await_data=True`, the function will block until a data response
-     *  occurs, or a timeout.
-     *
-     *  If `show_me=True`, the exact bytes send to the device will be printed.
-     * @param data
-     * @param showMe
-     * @param awaitData
-     * @param timeout in ms
-     * @returns
+     * Sends raw data to the device.
+     * @param data The raw data to send as Uint8Array.
+     * @param options Configuration for sending data.
+     * @returns A promise that resolves with the data response if awaitData is true, or void otherwise.
      */
     public async sendData(
-        data: Uint8Array,
+        data: Uint8Array, // This data should NOT include the 0x01 prefix. sendData adds it.
         options: {
             showMe?: boolean;
             awaitData?: boolean;
@@ -301,25 +319,33 @@ export class FrameBle {
         if (!this.txCharacteristic) {
             throw new Error("Not connected or TX characteristic not available.");
         }
-        if (data.byteLength > this.getMaxPayload(false)) {
-            throw new Error("Data payload is too large for a single packet.");
+        // The 'data' parameter is the payload. We add 1 byte for the prefix.
+        if (data.byteLength > this.getMaxPayload(false)) { // getMaxPayload(false) is correct
+            throw new Error(`Data payload (${data.byteLength} bytes) is too large for max data payload (${this.getMaxPayload(false)} bytes).`);
         }
 
-        const prefix = new Uint8Array([1]);
+        const prefix = new Uint8Array([1]); // 0x01 prefix for raw data
         const combinedData = new Uint8Array(prefix.length + data.byteLength);
         combinedData.set(prefix, 0);
-        combinedData.set(new Uint8Array(data), prefix.length);
+        combinedData.set(data, prefix.length); // data is already a Uint8Array
+
+        let dataTimeoutId: NodeJS.Timeout | undefined;
 
         if (awaitData) {
             this.awaitingDataResponse = true;
-            this.dataResponsePromise = new Promise((resolve, reject) => {
+            this.dataResponsePromise = new Promise<DataView<ArrayBufferLike>>((resolve, reject) => {
                 this.dataResolve = resolve;
-                setTimeout(() => {
+                dataTimeoutId = setTimeout(() => {
                     if (this.awaitingDataResponse) {
                         this.awaitingDataResponse = false;
-                        reject(new Error("Device didn't respond with data within timeout."));
+                        this.dataResolve = undefined;
+                        reject(new Error(`Device didn't respond with data within ${timeout}ms.`));
                     }
                 }, timeout);
+            }).finally(() => {
+                if (dataTimeoutId) {
+                    clearTimeout(dataTimeoutId);
+                }
             });
         }
 
@@ -331,37 +357,31 @@ export class FrameBle {
     }
 
     /**
-     * Sends a reset signal to the device which will reset the Lua virtual machine.
-     *
-     * @param showMe If `show_me=true`, the exact bytes send to the device will be printed.
+     * Sends a reset signal (0x04) to the device.
+     * @param showMe If true, logs the transmitted bytes.
      */
     public async sendResetSignal(showMe = false): Promise<void> {
         const signal = new Uint8Array([0x04]);
         await this.transmit(signal, showMe);
-        // Give it a moment after the Lua VM reset
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 200)); // Allow time for reset
     }
 
     /**
-     * Sends a break signal to the device which will break any currently executing Lua script.
-     *
-     * @param showMe If `show_me=true`, the exact bytes send to the device will be printed.
+     * Sends a break signal (0x03) to the device.
+     * @param showMe If true, logs the transmitted bytes.
      */
     public async sendBreakSignal(showMe = false): Promise<void> {
         const signal = new Uint8Array([0x03]);
         await this.transmit(signal, showMe);
-        // Give it a moment after the break
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 200)); // Allow time for break
     }
 
     /**
-     * Uploads a string as frame_file_path. If the file exists, it will be overwritten.
-     *
-     * @param content The string content to upload
-     * @param frameFilePath Target file path on Frame
+     * Uploads a string as a file to the specified path on Frame.
+     * @param content The string content to upload.
+     * @param frameFilePath Target file path on Frame (e.g., "main.lua").
      */
     public async uploadFileFromString(content: string, frameFilePath = "main.lua"): Promise<void> {
-        // Escape special characters
         let escapedContent = content.replace(/\r/g, "")
                                   .replace(/\\/g, "\\\\")
                                   .replace(/\n/g, "\\n")
@@ -369,18 +389,12 @@ export class FrameBle {
                                   .replace(/'/g, "\\'")
                                   .replace(/"/g, '\\"');
 
-        // Open the file on the frame
-        const openResponse = await this.sendLua(`f=frame.file.open('${frameFilePath}','w');print(1)`, {showMe: false, awaitPrint: true});
+        const openResponse = await this.sendLua(`f=frame.file.open('${frameFilePath}','w');print(1)`, {awaitPrint: true});
         if (openResponse !== "1") {
             throw new Error(`Failed to open file ${frameFilePath} on device. Response: ${openResponse}`);
         }
 
-
-        // Calculate chunk size accounting for the Lua command overhead
-        // f:write("CHUNK_HERE");print(1) -> 22 characters overhead approx.
-        // Lua command: f:write("");print(1) is 20 chars for the command itself.
-        // Plus quotes for the string: 2 chars. So 22.
-        const luaCommandOverhead = 22;
+        const luaCommandOverhead = `f:write("");print(1)`.length; // Approx. 20 + 2 for quotes
         const maxChunkSize = this.getMaxPayload(true) - luaCommandOverhead;
 
         if (maxChunkSize <= 0) {
@@ -392,105 +406,83 @@ export class FrameBle {
             let currentChunkSize = Math.min(maxChunkSize, escapedContent.length - i);
             let chunk = escapedContent.substring(i, i + currentChunkSize);
 
-            // Check for split escape sequences at the end of the chunk.
-            // If the chunk ends with an odd number of backslashes, the last one is escaping the quote.
-            // We need to reduce the chunk size to avoid sending an incomplete escape sequence.
-            // Example: content "...\abc\\", chunk ends as "...\abc\", quote would be \"
-            // If chunk ends as "...\abc\\", quote would be \\" (escaped slash, then quote)
-            // This is a simplified check. The python version is more robust.
-            // For a simple scenario, if a chunk ends with '\', it might break the Lua string.
-            // A better approach for web might be to Hex encode the string chunks if issues persist.
-            if (chunk.endsWith("\\")) {
-                 // Count trailing backslashes
+            // Robust handling for escape characters at chunk boundaries
+            while (chunk.endsWith("\\")) {
                 let trailingSlashes = 0;
                 for (let k = chunk.length - 1; k >= 0; k--) {
-                    if (chunk[k] === '\\') {
-                        trailingSlashes++;
-                    } else {
-                        break;
-                    }
+                    if (chunk[k] === '\\') trailingSlashes++;
+                    else break;
                 }
-                // If odd number of trailing slashes, the last one would escape the closing quote of Lua string
-                if (trailingSlashes % 2 !== 0) {
-                    if (currentChunkSize > 1) { // Ensure we can reduce
-                       currentChunkSize--;
-                       chunk = escapedContent.substring(i, i + currentChunkSize);
+                if (trailingSlashes % 2 !== 0) { // Odd number of trailing slashes means last one escapes quote
+                    if (currentChunkSize > 1) {
+                        currentChunkSize--;
+                        chunk = escapedContent.substring(i, i + currentChunkSize);
                     } else {
-                        // This scenario (single backslash chunk that cannot be reduced) is problematic
-                        // and might require a more complex solution like base64 encoding the chunk.
-                        // For now, we'll throw an error or log a warning.
-                        throw new Error("Cannot safely chunk content due to isolated escape character at chunk boundary.");
+                        // This chunk is just a single '\' or ends in an odd number of '\' and cannot be reduced.
+                        // This is a problematic case. Consider base64 encoding or other strategies if this occurs.
+                        // For now, we throw an error as it would break the Lua string.
+                        await this.sendLua("f:close();print(nil)", {awaitPrint: true}); // Attempt to close file
+                        throw new Error("Cannot safely chunk content due to isolated escape character at chunk boundary. File upload aborted.");
                     }
+                } else {
+                    break; // Even number of slashes, or no trailing slash, is fine.
                 }
             }
 
 
-            const writeResponse = await this.sendLua(`f:write("${chunk}");print(1)`, {showMe: false, awaitPrint: true});
+            const writeResponse = await this.sendLua(`f:write("${chunk}");print(1)`, {awaitPrint: true});
             if (writeResponse !== "1") {
+                 await this.sendLua("f:close();print(nil)", {awaitPrint: true}); // Attempt to close file
                 throw new Error(`Failed to write chunk to ${frameFilePath}. Response: ${writeResponse}`);
             }
             i += currentChunkSize;
         }
 
-        // Close the file
-        const closeResponse = await this.sendLua("f:close();print(nil)", {showMe: false, awaitPrint: true});
-        // print(nil) results in an empty string or specific device response for nil.
-        // The python code expects "None" or "" or specific response.
-        // For WebBluetooth, an empty string is common for `print(nil)`.
-        // We'll consider an empty string or a specific "nil" string as success.
-        if (closeResponse !== "" && closeResponse !== "nil" && closeResponse !== null && typeof closeResponse !== 'undefined') {
-             // console.warn(`Unexpected response when closing file: '${closeResponse}'`);
-             // Depending on device, this might not be an error. If issues, check device behavior for print(nil).
-        }
+        await this.sendLua("f:close();print(nil)", {awaitPrint: true});
+        // Note: print(nil) often results in an empty string or device-specific "nil" response.
+        // No strict check on closeResponse as it varies.
     }
 
     /**
      * Uploads content (as a string) to the specified file path on the Frame.
-     * If the target file exists, it will be overwritten.
-     * Note: In a web environment, file content must be read by the application
-     * (e.g., from a File input or fetched) before calling this method.
-     *
      * @param fileContent The string content of the file to upload.
      * @param frameFilePath Target file path on the frame (e.g., "main.lua").
      */
     public async uploadFile(fileContent: string, frameFilePath = "main.lua"): Promise<void> {
-        // In a browser context, we can't read from a local_file_path directly
-        // like in Python. The content must be provided.
         await this.uploadFileFromString(fileContent, frameFilePath);
     }
 
     /**
-     *  Send a large payload in chunks determined by BLE MTU size.
-     *
-     *  Raises:
-     *      Error: If msg_code is not in range 0-255 or payload size exceeds 65535
-     *
-     *  Note:
-     *      First packet format: [msg_code(1), size_high(1), size_low(1), data(...)]
-     *      Other packets format: [msg_code(1), data(...)]
-     *
-     * @param msgCode Message type identifier (0-255)
-     * @param payload Data to be sent
-     * @param showMe If true, the exact bytes send to the device will be printed
+     * Sends a large payload in chunks.
+     * @param msgCode Message type identifier (0-255).
+     * @param payload Data to be sent as Uint8Array. This is the pure payload, without msgCode or size.
+     * @param showMe If true, logs the transmitted bytes.
      */
     public async sendMessage(msgCode: number, payload: Uint8Array, showMe = false): Promise<void> {
-        const HEADER_SIZE = 3; // msg_code(1), size_high(1), size_low(1)
-        const SUBSEQUENT_HEADER_SIZE = 1; // just msg_code
-        const MAX_TOTAL_SIZE = 65535; // 2^16 - 1
+        const HEADER_SIZE = 2; // size_high(1), size_low(1). msgCode is part of the data in sendData.
+        const MAX_TOTAL_PAYLOAD_SIZE = 65535; // Max size for the payload itself.
 
         if (msgCode < 0 || msgCode > 255) {
             throw new Error(`Message code must be 0-255, got ${msgCode}`);
         }
 
-        const totalSize = payload.byteLength;
-        if (totalSize > MAX_TOTAL_SIZE) {
-            throw new Error(`Payload size ${totalSize} exceeds maximum ${MAX_TOTAL_SIZE} bytes`);
+        const totalPayloadSize = payload.byteLength;
+        if (totalPayloadSize > MAX_TOTAL_PAYLOAD_SIZE) {
+            throw new Error(`Payload size ${totalPayloadSize} exceeds maximum ${MAX_TOTAL_PAYLOAD_SIZE} bytes`);
         }
 
-        const maxDataPayload = this.getMaxPayload(false); // Corresponds to python's self.max_data_payload()
+        // maxDataPayloadForSend is the max size for the *data* part of a sendData call.
+        const maxDataPayloadForSend = this.getMaxPayload(false);
 
-        const maxFirstChunkDataSize = maxDataPayload - HEADER_SIZE;
-        const maxSubsequentChunkDataSize = maxDataPayload - SUBSEQUENT_HEADER_SIZE;
+        // First packet: [msgCode(1), size_high(1), size_low(1), data_chunk(...)]
+        // The data for sendData will be: [msgCode, size_high, size_low, payload_chunk_1]
+        // So, the payload_chunk_1 size is maxDataPayloadForSend - 1 (for msgCode) - 2 (for size bytes)
+        const maxFirstChunkDataSize = maxDataPayloadForSend - 1 - HEADER_SIZE;
+
+        // Subsequent packets: [msgCode(1), data_chunk(...)]
+        // The data for sendData will be: [msgCode, payload_chunk_n]
+        // So, the payload_chunk_n size is maxDataPayloadForSend - 1 (for msgCode)
+        const maxSubsequentChunkDataSize = maxDataPayloadForSend - 1;
 
         if (maxFirstChunkDataSize <=0 || maxSubsequentChunkDataSize <=0) {
             throw new Error("Max payload size too small for message sending protocol.");
@@ -499,26 +491,29 @@ export class FrameBle {
         let sentBytes = 0;
 
         // Send first chunk
-        const firstChunkDataSize = Math.min(maxFirstChunkDataSize, totalSize);
-        const firstPacket = new Uint8Array(HEADER_SIZE + firstChunkDataSize);
-        firstPacket[0] = msgCode;
-        firstPacket[1] = totalSize >> 8;    // size_high
-        firstPacket[2] = totalSize & 0xFF;  // size_low
-        firstPacket.set(payload.subarray(0, firstChunkDataSize), HEADER_SIZE);
+        const firstChunkActualDataSize = Math.min(maxFirstChunkDataSize, totalPayloadSize);
+        // Data to pass to sendData:
+        const firstPacketDataForSendData = new Uint8Array(1 + HEADER_SIZE + firstChunkActualDataSize);
+        firstPacketDataForSendData[0] = msgCode;
+        firstPacketDataForSendData[1] = totalPayloadSize >> 8;    // size_high
+        firstPacketDataForSendData[2] = totalPayloadSize & 0xFF;  // size_low
+        firstPacketDataForSendData.set(payload.subarray(0, firstChunkActualDataSize), 1 + HEADER_SIZE);
 
-        await this.sendData(firstPacket.slice(firstPacket.byteOffset, firstPacket.byteOffset + firstPacket.byteLength), {showMe: showMe, awaitData: true}); // Slice to get correct ArrayBuffer
-        sentBytes += firstChunkDataSize;
+        // sendData will add its own 0x01 prefix. We expect a data response.
+        await this.sendData(firstPacketDataForSendData, {showMe: showMe, awaitData: true});
+        sentBytes += firstChunkActualDataSize;
 
         // Send remaining chunks
-        while (sentBytes < totalSize) {
-            const remaining = totalSize - sentBytes;
-            const currentChunkDataSize = Math.min(maxSubsequentChunkDataSize, remaining);
-            const subsequentPacket = new Uint8Array(SUBSEQUENT_HEADER_SIZE + currentChunkDataSize);
-            subsequentPacket[0] = msgCode;
-            subsequentPacket.set(payload.subarray(sentBytes, sentBytes + currentChunkDataSize), SUBSEQUENT_HEADER_SIZE);
+        while (sentBytes < totalPayloadSize) {
+            const remaining = totalPayloadSize - sentBytes;
+            const currentChunkActualDataSize = Math.min(maxSubsequentChunkDataSize, remaining);
+            // Data to pass to sendData:
+            const subsequentPacketDataForSendData = new Uint8Array(1 + currentChunkActualDataSize);
+            subsequentPacketDataForSendData[0] = msgCode;
+            subsequentPacketDataForSendData.set(payload.subarray(sentBytes, sentBytes + currentChunkActualDataSize), 1);
 
-            await this.sendData(subsequentPacket.slice(subsequentPacket.byteOffset, subsequentPacket.byteOffset + subsequentPacket.byteLength), {showMe: showMe, awaitData: true}); // Slice to get correct ArrayBuffer
-            sentBytes += currentChunkDataSize;
+            await this.sendData(subsequentPacketDataForSendData, {showMe: showMe, awaitData: true});
+            sentBytes += currentChunkActualDataSize;
         }
     }
 }
