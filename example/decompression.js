@@ -27,7 +27,6 @@ export async function run() {
   end
 
   frame.bluetooth.receive_callback(ble_func)
-  print("hello")
   `;
 
   console.log("Lua script length:", luaScript.length);
