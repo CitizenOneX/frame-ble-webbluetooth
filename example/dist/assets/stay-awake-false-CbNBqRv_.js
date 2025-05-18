@@ -1,1 +1,0 @@
-import{F as e}from"./frame-ble-Boz78onj.js";async function t(){const a=new e;await a.connect(),await a.sendBreakSignal(),await a.sendLua("frame.stay_awake(false);print(0)",{awaitPrint:!0}),await a.sendLua("frame.sleep()"),console.log("Frame will switch off when placed in the charging cradle, and will be put to sleep now (tap to wake)"),await a.disconnect()}export{t as run};
