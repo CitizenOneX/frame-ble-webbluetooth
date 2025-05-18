@@ -5,7 +5,7 @@ export default defineConfig({
   build: {
     lib: {
       entry: 'src/index.ts',
-      name: 'FrameBle',
+      name: 'frame-ble',
       fileName: (format) => `frame-ble.${format}.js`,
       formats: ['umd', 'es'],
     },
