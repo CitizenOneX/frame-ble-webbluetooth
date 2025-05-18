@@ -1,1 +1,1 @@
-export { FrameBle } from './FrameBle';
+export { FrameBle } from './frame-ble';
