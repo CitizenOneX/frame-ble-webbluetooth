@@ -1,0 +1,1 @@
+import{F as t}from"./frame-ble-Boz78onj.js";async function n(){const a=new t;await a.connect(),await a.sendBreakSignal(),await a.sendLua("frame.stay_awake(true);print(0)",{awaitPrint:!0}),await a.disconnect()}export{n as run};
