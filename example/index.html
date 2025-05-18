@@ -4,21 +4,30 @@
     <title>frame-ble Examples</title>
 
     <script type="module">
-        async function runExample(exampleName) {
+      const exampleModules = import.meta.glob('./*.js');
+      async function runExample(exampleName) {
+        const path = `./${exampleName}.js`; // Construct the path key
+
+        // Check if the module exists in our globbed modules
+        if (exampleModules[path]) {
           try {
-            const module = await import(/* @vite-ignore */ `./${exampleName}.js`);
+            // 3. Call the function to get the Promise for the module
+            const module = await exampleModules[path]();
             if (module && module.run) {
               module.run();
             } else {
-              console.error(`Module ${exampleName}.js does not have a 'run' function.`);
+              console.error(`Module ${exampleName}.js (resolved to ${path}) does not have a 'run' function or failed to load.`);
             }
           } catch (error) {
-            console.error('Failed to load example:', error);
+            console.error(`Failed to load or run example '${exampleName}':`, error);
           }
+        } else {
+          console.error(`Example '${exampleName}' (path ${path}) not found. Available modules:`, Object.keys(exampleModules));
         }
+      }
 
-        // Make runExample globally accessible
-        window.runExample = runExample;
+      // Make runExample globally accessible
+      window.runExample = runExample;
     </script>
   </head>
 

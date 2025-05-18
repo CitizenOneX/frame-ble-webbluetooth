@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:example": "vite build --config example/vite.config.ts",
     "preview": "vite preview",
     "dev:demo": "vite --config example/vite.config.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
