@@ -109,83 +109,211 @@ export class FrameBle {
     }
 
     /**
-    Connects to the first Frame device discovered.
+     * Attempts to establish a connection with the device and set up characteristics.
+     * This method is intended to be called internally by `connect` and handles a single connection attempt.
+     */
+    private async _attemptConnection(): Promise<void> {
+        if (!this.device || !this.device.gatt) {
+            // this.device should be set by the connect() method before calling this.
+            // this.device.gatt might be null if the device object exists but was never connected.
+            throw new Error("Bluetooth device or GATT interface not available for connection attempt.");
+        }
+
+        // Reset characteristics and server from any previous failed attempt within a retry loop.
+        this.txCharacteristic = undefined;
+        this.rxCharacteristic = undefined;
+        this.server = undefined;
+
+        try {
+            console.log(`Attempting to connect to GATT server on device: ${this.device.name || this.device.id}...`);
+            this.server = await this.device.gatt.connect();
+            console.log("GATT server connected.");
+
+            console.log("Getting primary service...");
+            const service = await this.server.getPrimaryService(this.SERVICE_UUID);
+            console.log("Primary service obtained.");
+
+            console.log("Getting TX characteristic...");
+            this.txCharacteristic = await service.getCharacteristic(this.TX_CHARACTERISTIC_UUID);
+            console.log("TX characteristic obtained.");
+
+            console.log("Getting RX characteristic...");
+            this.rxCharacteristic = await service.getCharacteristic(this.RX_CHARACTERISTIC_UUID);
+            console.log("RX characteristic obtained.");
+
+            console.log("Starting notifications on RX characteristic...");
+            await this.rxCharacteristic.startNotifications();
+            this.rxCharacteristic.addEventListener('characteristicvaluechanged', this.notificationHandler);
+            console.log("Notifications started.");
+
+            await this.sendBreakSignal(false); // Initialize device state if necessary
+
+            console.log("Fetching MTU size (max_length) from device...");
+            const mtuString = await this.sendLua("print(frame.bluetooth.max_length())", {awaitPrint: true});
+            if (mtuString === undefined || mtuString === null) {
+                throw new Error("Failed to get MTU size from device: no response.");
+            }
+            const mtu = parseInt(mtuString);
+            if (isNaN(mtu) || mtu <= 0) {
+                throw new Error(`Invalid MTU size received: '${mtuString}'`);
+            }
+            this.maxPayload = mtu;
+            console.log(`MTU size set to: ${this.maxPayload}`);
+
+        } catch (error) {
+            console.error("Error during connection attempt:", error);
+            // Cleanup for this specific failed attempt
+            if (this.rxCharacteristic) {
+                try {
+                    // Only try to stop notifications if gatt was connected and rxCharacteristic was obtained
+                    if (this.device?.gatt?.connected) {
+                        await this.rxCharacteristic.stopNotifications();
+                    }
+                } catch (stopNotificationError) {
+                    // console.warn("Could not stop notifications during attempt cleanup:", stopNotificationError);
+                }
+                this.rxCharacteristic.removeEventListener('characteristicvaluechanged', this.notificationHandler);
+                this.rxCharacteristic = undefined;
+            }
+            this.txCharacteristic = undefined;
+            if (this.device?.gatt?.connected) {
+                this.device.gatt.disconnect(); // Disconnect from GATT for this attempt
+            }
+            this.server = undefined;
+            throw error; // Rethrow to be handled by the calling loop in connect()
+        }
+    }
+
+    /**
+    Connects to a Frame device. Prompts the user to select a device if one is not already known.
+    Retries connection establishment on specific errors.
     */
     public async connect(
         options: {
             name?: string;
             namePrefix?: string;
+            numAttempts?: number;
+            retryDelayMs?: number;
         } = {}
     ): Promise<string | undefined> {
+        const { name, namePrefix, numAttempts = 5, retryDelayMs = 1000 } = options;
+
         if (!navigator.bluetooth) {
             throw new Error("Web Bluetooth API not available.");
         }
 
-        const baseFilter: BluetoothLEScanFilter = options.name
-            ? { services: [this.SERVICE_UUID], name: options.name }
-            : options.namePrefix
-                ? { services: [this.SERVICE_UUID], namePrefix: options.namePrefix }
-                : { services: [this.SERVICE_UUID] };
+        // Step 1: Request device from browser - This happens only if this.device is not already set.
+        if (!this.device) {
+            const baseFilter: BluetoothLEScanFilter = name
+                ? { services: [this.SERVICE_UUID], name: name }
+                : namePrefix
+                    ? { services: [this.SERVICE_UUID], namePrefix: namePrefix }
+                    : { services: [this.SERVICE_UUID] };
 
-        const deviceOptions: RequestDeviceOptions = {
-            filters: [baseFilter],
-            optionalServices: [this.SERVICE_UUID],
-        };
+            const deviceOptions: RequestDeviceOptions = {
+                filters: [baseFilter],
+                optionalServices: [this.SERVICE_UUID],
+            };
+            try {
+                console.log("Requesting Bluetooth device from user...");
+                this.device = await navigator.bluetooth.requestDevice(deviceOptions);
+                if (!this.device) {
+                    // This case should ideally be caught by requestDevice throwing an error if user cancels.
+                    throw new Error("No device selected by the user.");
+                }
+                console.log(`Device selected: ${this.device.name || this.device.id}`);
+            } catch (error) {
+                console.error("Bluetooth device request failed:", error);
+                this.device = undefined; // Ensure device is reset
+                throw error; // Rethrow error from requestDevice (e.g., user cancellation)
+            }
+        }
 
-        try {
-            this.device = await navigator.bluetooth.requestDevice(deviceOptions);
+        // At this point, this.device should be set (either pre-existing or newly selected).
+        if (!this.device) {
+            // Fallback, should have been handled by logic above.
+            throw new Error("Device not available after selection phase.");
+        }
+
+        // Store a reference to the device we are attempting to connect to for this sequence.
+        // This is important because this.handleDisconnect might clear this.device.
+        const currentDeviceToConnect = this.device;
+
+        // Ensure the 'gattserverdisconnected' listener is correctly managed for the current device.
+        // Remove first to prevent duplicates if connect is called multiple times on the same instance.
+        currentDeviceToConnect.removeEventListener('gattserverdisconnected', this.handleDisconnect);
+        currentDeviceToConnect.addEventListener('gattserverdisconnected', this.handleDisconnect);
+
+        let lastError: any;
+
+        for (let attempt = 1; attempt <= numAttempts; attempt++) {
+            // If this.device became null due to an external disconnect event handled by handleDisconnect
             if (!this.device) {
-                throw new Error("No device selected or found.");
+                console.warn(`Device (id: ${currentDeviceToConnect.id}) was disconnected externally during connection attempts.`);
+                lastError = lastError || new Error(`Device disconnected externally during connection attempt ${attempt}.`);
+                break; // Exit retry loop as the device instance is no longer valid.
             }
 
-            this.device.addEventListener('gattserverdisconnected', this.handleDisconnect);
+            try {
+                console.log(`Connection attempt ${attempt} of ${numAttempts} to device '${currentDeviceToConnect.name || currentDeviceToConnect.id}'...`);
+                await this._attemptConnection(); // Uses this.device internally
+                console.log(`Successfully connected to ${currentDeviceToConnect.name || currentDeviceToConnect.id} on attempt ${attempt}.`);
+                return currentDeviceToConnect.id || currentDeviceToConnect.name || "Unknown Device";
+            } catch (error) {
+                lastError = error;
+                console.error(`Attempt ${attempt} to connect to '${currentDeviceToConnect.name || currentDeviceToConnect.id}' failed:`, error);
 
-            this.server = await this.device.gatt!.connect();
-            const service = await this.server.getPrimaryService(this.SERVICE_UUID);
-            this.txCharacteristic = await service.getCharacteristic(this.TX_CHARACTERISTIC_UUID);
-            this.rxCharacteristic = await service.getCharacteristic(this.RX_CHARACTERISTIC_UUID);
-            await this.rxCharacteristic.startNotifications();
+                // Check if it's the specific retryable error
+                const isRetryableError = error instanceof Error &&
+                                         error.name === 'NetworkError' && // DOMException name
+                                         (error.message.includes('Connection attempt failed.') ||
+                                          error.message.includes('GATT operation failed for unknown reason.') ||
+                                          error.message.includes('GATT Server is disconnected.') || // Potentially retryable if transient
+                                          error.message.includes('Bluetooth device is already connected.') // Can happen, usually resolves
+                                         );
 
-            this.rxCharacteristic.addEventListener('characteristicvaluechanged', this.notificationHandler);
-
-            await this.sendBreakSignal(false);
-
-            const mtuString = await this.sendLua("print(frame.bluetooth.max_length())", {awaitPrint: true});
-            if (mtuString === undefined || mtuString === null) {
-                throw new Error("Failed to get MTU size from device.");
-            } else {
-                const mtu = parseInt(mtuString);
-                if (isNaN(mtu) || mtu <= 0) {
-                    throw new Error(`Invalid MTU size received: '${mtuString}'`);
+                if (isRetryableError && attempt < numAttempts) {
+                    console.log(`Retryable error encountered. Retrying in ${retryDelayMs / 1000}s...`);
+                    await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+                    // _attemptConnection's catch block should have cleaned up resources for the next attempt
+                    // (e.g., disconnected GATT if it was connected during the failed attempt).
                 } else {
-                    this.maxPayload = mtu;
+                    console.log("Non-retryable error or max attempts reached. Aborting connection process.");
+                    break; // Exit loop to proceed to final cleanup and throw
                 }
             }
+        }
 
-            return this.device.id || this.device.name || "Unknown Device";
-        } catch (error) {
-            console.error("Connection failed:", error);
-            if (this.device) {
-                this.device.removeEventListener('gattserverdisconnected', this.handleDisconnect);
-                if (this.device.gatt?.connected) {
-                    this.device.gatt.disconnect();
-                }
-            }
-            if (this.rxCharacteristic) {
-                try {
-                    if (this.device?.gatt?.connected) {
-                         await this.rxCharacteristic.stopNotifications();
-                    }
-                } catch (stopNotificationError) {
-                    // console.warn("Could not stop notifications on failed connect:", stopNotificationError);
-                }
-                this.rxCharacteristic.removeEventListener('characteristicvaluechanged', this.notificationHandler);
-            }
-            this.device = undefined;
-            this.server = undefined;
-            this.txCharacteristic = undefined;
-            this.rxCharacteristic = undefined;
-            throw error;
+        // If loop finishes, all attempts failed or a non-retryable/external error occurred.
+        console.error(`Failed to connect to device '${currentDeviceToConnect.name || currentDeviceToConnect.id}' after ${numAttempts} attempts or due to external disconnection.`);
+
+        // Final cleanup:
+        // Remove the specific listener from the device we were working with.
+        currentDeviceToConnect.removeEventListener('gattserverdisconnected', this.handleDisconnect);
+
+        // If gatt was connected on currentDeviceToConnect (e.g. _attemptConnection failed after gatt.connect but before full setup)
+        // and _attemptConnection's cleanup didn't run or fully succeed, or if it was connected from a previous session.
+        // Note: this.device.gatt.disconnect() in _attemptConnection's catch handles attempt-specific disconnects.
+        // This is a final safeguard.
+        if (currentDeviceToConnect.gatt?.connected) {
+            currentDeviceToConnect.gatt.disconnect();
+        }
+
+        // Clear all class state properties as in the original catch block if connection ultimately fails.
+        this.server = undefined;
+        this.txCharacteristic = undefined;
+        this.rxCharacteristic = undefined; // Listeners on rxCharacteristic are managed by _attemptConnection
+
+        // Crucially, clear this.device so a subsequent call to connect() re-prompts the user for a device.
+        // This happens regardless of whether currentDeviceToConnect was the same as this.device at this point
+        // (it should be, unless handleDisconnect cleared this.device).
+        this.device = undefined;
+
+        if (lastError) {
+            throw lastError;
+        } else {
+            // This case should ideally not be reached if numAttempts >= 1, as lastError would be set.
+            throw new Error(`Failed to connect to ${currentDeviceToConnect.name || currentDeviceToConnect.id} after ${numAttempts} attempts. No specific error recorded, or device disconnected externally.`);
         }
     }
 
