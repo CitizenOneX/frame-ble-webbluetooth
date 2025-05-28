@@ -1,3 +1,7 @@
+## 0.2.2
+
+* Republished with dist files generated
+
 ## 0.2.1
 
 * Republished with package lock updated
