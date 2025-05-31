@@ -1,3 +1,8 @@
+## 0.3.0
+
+* connect() returns device name in preference to device id
+* examples: print console log messages to example web page in addition to console log (helpful for mobile browsers with no dev tools/console)
+
 ## 0.2.2
 
 * Republished with dist files generated
