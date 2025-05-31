@@ -66,5 +66,41 @@
         <button onclick="runExample('custom-lua-functions')">Custom Lua Functions</button>
       </li>
     </ul>
-    </body>
+    <hr />
+    <div id="log"></div>
+  <script>
+    const logElement = document.getElementById("log");
+
+    function captureConsoleMethod(methodName, cssClass) {
+      const original = console[methodName];
+
+      console[methodName] = function (...args) {
+        // Call the original console method
+        original.apply(console, args);
+
+        // Format the arguments
+        const message = args.map(arg =>
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+        ).join(' ');
+
+        // Create a new line element with styling
+        const line = document.createElement('div');
+        line.className = cssClass;
+        line.textContent = `[${methodName}] ${message}`;
+        logElement.appendChild(line);
+
+        // Auto-scroll to bottom
+        logElement.scrollTop = logElement.scrollHeight;
+      };
+    }
+
+    // Hook into major console methods
+    captureConsoleMethod('log', 'log');
+    captureConsoleMethod('error', 'error');
+    captureConsoleMethod('warn', 'warn');
+    captureConsoleMethod('info', 'info');
+    captureConsoleMethod('debug', 'debug');
+  </script>
+
+  </body>
 </html>
