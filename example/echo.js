@@ -40,7 +40,7 @@ export async function run() {
   var myFibNum = 20;
   // and then call it
   var fibAnswer = await frameBle.sendLua("print(fib[" + myFibNum + "])", {awaitPrint: true});
-  console.log("Fibonacci number %d is: %s", myFibNum, fibAnswer);
+  console.log(`Fibonacci number ${myFibNum} is: ${fibAnswer}`);
 
   // If lines of code will be too long to fit in a single bluetooth packet(~240 bytes, depending)
   // then other strategies are needed, including sending Lua files to Frame and then calling their functions.
