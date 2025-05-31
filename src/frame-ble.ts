@@ -258,7 +258,7 @@ export class FrameBle {
                 console.log(`Connection attempt ${attempt} of ${numAttempts} to device '${currentDeviceToConnect.name || currentDeviceToConnect.id}'...`);
                 await this._attemptConnection(); // Uses this.device internally
                 console.log(`Successfully connected to ${currentDeviceToConnect.name || currentDeviceToConnect.id} on attempt ${attempt}.`);
-                return currentDeviceToConnect.id || currentDeviceToConnect.name || "Unknown Device";
+                return currentDeviceToConnect.name || currentDeviceToConnect.id || "Unknown Device";
             } catch (error) {
                 lastError = error;
                 console.error(`Attempt ${attempt} to connect to '${currentDeviceToConnect.name || currentDeviceToConnect.id}' failed:`, error);
