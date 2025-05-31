@@ -1,13 +1,13 @@
-/* Import a pixel font - Press Start 2P or Pixelify Sans are still good */
-@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Pixelify+Sans:wght@400..700&display=swap');
+/* Import a pixel font - Press Start 2P */
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
 
 body {
     /* Sky-like gradient background */
     background: linear-gradient(to bottom, #7bd4ff 0%, #89ceff 40%, #a3ddff 60%, #fcc89c 100%);
     /* Or a solid light blue: background-color: #7bd4ff; */
     color: #3a200c; /* Dark brown text for good contrast on light background */
-    font-family: 'Pixelify Sans', 'Press Start 2P', Courier, monospace;
-    font-size: 18px; /* Pixelify Sans can be a bit more readable at slightly larger sizes */
+    font-family: 'Press Start 2P', Courier, monospace;
+    font-size: 18px;
     image-rendering: pixelated;
     -webkit-font-smoothing: none;
     -moz-osx-font-smoothing: grayscale;
@@ -75,7 +75,7 @@ button {
     color: #FFFFFF;           /* White text */
     border: 3px solid #2e8b57; /* SeaGreen - darker grass border */
     padding: 12px 18px;
-    font-family: 'Press Start 2P', 'Pixelify Sans', Courier, monospace;
+    font-family: 'Press Start 2P', Courier, monospace;
     font-size: 0.8em; /* Buttons with Press Start 2P often need smaller font size */
     cursor: pointer;
     text-transform: uppercase;
