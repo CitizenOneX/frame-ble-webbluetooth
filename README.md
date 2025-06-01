@@ -1,12 +1,8 @@
 # frame-ble
 
-Low-level library for Bluetooth LE connection to [Brilliant Labs Frame](https://brilliant.xyz/)
+Low-level library for Bluetooth LE connection to [Brilliant Labs Frame](https://brilliant.xyz/).
 
-[Frame SDK documentation](https://docs.brilliant.xyz/frame/frame-sdk/).
-
-[GitHub](https://github.com/CitizenOneX/frame-ble-webbluetooth/).
-
-[Live Examples](https://citizenonex.github.io/frame-ble-webbluetooth/).
+[Frame SDK documentation](https://docs.brilliant.xyz/frame/frame-sdk/) | [GitHub Repo](https://github.com/CitizenOneX/frame-ble-webbluetooth/) | [API Docs](https://citizenonex.github.io/frame-ble-webbluetooth/api) | [Live Examples](https://citizenonex.github.io/frame-ble-webbluetooth/)
 
 ## Installation
 
