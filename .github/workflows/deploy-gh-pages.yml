@@ -41,6 +41,9 @@ jobs:
       - name: Build Example
         run: npm run build:example # This uses the script from your package.json
 
+      - name: Generate API Docs
+        run: npm run docs:api
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
