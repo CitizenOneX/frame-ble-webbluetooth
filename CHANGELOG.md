@@ -1,3 +1,7 @@
+## 0.3.1
+
+* Improved TypeDoc comments for API reference
+
 ## 0.3.0
 
 * connect() returns device name in preference to device id
