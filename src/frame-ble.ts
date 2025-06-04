@@ -27,6 +27,10 @@ export class FrameBle {
     private onPrintResponse?: (data: string) => void | Promise<void>;
     private onDisconnectHandler?: () => void;
 
+    /**
+     * Creates an instance of FrameBle.
+     * The constructor is currently empty as most setup occurs during the connect method.
+     */
     constructor() {}
 
     /**
@@ -185,9 +189,19 @@ export class FrameBle {
     }
 
     /**
-    Connects to a Frame device. Prompts the user to select a device if one is not already known.
-    Retries connection establishment on specific errors.
-    */
+     * Connects to a Frame device.
+     *
+     * Prompts the user to select a Bluetooth device if one is not already known or connected.
+     * Handles connection attempts, retries, and characteristic setup.
+     *
+     * @param options - Optional configuration for the connection process.
+     * @param options.name - The exact name of the device to connect to.
+     * @param options.namePrefix - The prefix of the device name to filter by.
+     * @param options.numAttempts - The maximum number of connection attempts. Defaults to 5.
+     * @param options.retryDelayMs - The delay in milliseconds between retry attempts. Defaults to 1000ms.
+     * @returns A promise that resolves with the name or ID of the connected device, or undefined if connection fails.
+     * @throws Error if Web Bluetooth is not available, if device selection is cancelled, or if connection fails after all attempts.
+     */
     public async connect(
         options: {
             name?: string;
@@ -196,7 +210,7 @@ export class FrameBle {
             retryDelayMs?: number;
         } = {}
     ): Promise<string | undefined> {
-        const { name, namePrefix, numAttempts = 5, retryDelayMs = 1000 } = options;
+        const { name, namePrefix, numAttempts = 5, retryDelayMs = 1000 } = options; // Default values mentioned in JSDoc
 
         if (!navigator.bluetooth) {
             throw new Error("Web Bluetooth API not available.");
@@ -317,18 +331,37 @@ export class FrameBle {
         }
     }
 
-    public async disconnect() {
+    /**
+     * Disconnects from the currently connected Frame device.
+     * If no device is connected, this method does nothing.
+     * It also triggers the `handleDisconnect` cleanup logic if not connected,
+     * or relies on the 'gattserverdisconnected' event if connected.
+     * @returns A promise that resolves once the disconnection process has been initiated, or immediately if already disconnected.
+     */
+    public async disconnect(): Promise<void> {
         if (this.device && this.device.gatt?.connected) {
             this.device.gatt.disconnect();
         } else {
-            this.handleDisconnect();
+            this.handleDisconnect(); // handleDisconnect is typically called by the 'gattserverdisconnected' event. Calling it here ensures immediate state cleanup if the event is delayed or not fired.
         }
     }
 
+    /**
+     * Checks if the Frame device is currently connected.
+     * @returns True if the device is connected, false otherwise.
+     */
     public isConnected(): boolean {
         return !!(this.device && this.device.gatt && this.device.gatt.connected);
     }
 
+    /**
+     * Gets the maximum payload size for a single BLE transmission.
+     * This value is determined after device connection.
+     * For Lua strings, the full `maxPayload` can be used.
+     * For data packets (which include a 0x01 prefix byte), the effective payload is `maxPayload - 1`.
+     * @param isLua If true, returns the max payload for Lua strings. Otherwise, for data packets.
+     * @returns The maximum payload size in bytes.
+     */
     public getMaxPayload(isLua: boolean): number {
         return isLua ? this.maxPayload : this.maxPayload - 1;
     }
@@ -346,6 +379,16 @@ export class FrameBle {
         await this.txCharacteristic.writeValueWithResponse(data);
     }
 
+    /**
+     * Sends a Lua command string to the Frame device.
+     * @param str The Lua command string to send.
+     * @param options Optional configuration for sending the Lua command.
+     * @param options.showMe If true, logs the transmitted data (hex format) to the console. Defaults to false.
+     * @param options.awaitPrint If true, waits for a print response from the device. Defaults to false.
+     * @param options.timeout The timeout in milliseconds to wait for a print response if `awaitPrint` is true. Defaults to 5000ms.
+     * @returns A promise that resolves with the print response string if `awaitPrint` is true, or void otherwise.
+     * @throws Error if the Lua string payload is too large or if a timeout occurs while awaiting a print response.
+     */
     public async sendLua(
         str: string,
         options: {
@@ -354,7 +397,7 @@ export class FrameBle {
             timeout?: number;
         } = {}
     ): Promise<string | void> {
-        const { showMe = false, awaitPrint = false, timeout = 5000 } = options;
+        const { showMe = false, awaitPrint = false, timeout = 5000 } = options; // Default values documented
         const encodedString = new TextEncoder().encode(str);
         if (encodedString.byteLength > this.getMaxPayload(true)) {
              throw new Error(`Lua string payload (${encodedString.byteLength} bytes) is too large for max Lua payload (${this.getMaxPayload(true)} bytes).`);
@@ -385,10 +428,14 @@ export class FrameBle {
     }
 
     /**
-     * Sends raw data to the device. The data is prefixed with 0x01.
-     * @param data The raw application payload to send as Uint8Array.
-     * @param options Configuration for sending data.
-     * @returns A promise that resolves with the Uint8Array data response if awaitData is true, or void otherwise.
+     * Sends raw data to the device. The data is prefixed with a `0x01` byte to distinguish it from Lua commands.
+     * @param data The raw application payload to send as a Uint8Array. This is the actual data without the prefix.
+     * @param options Optional configuration for sending data.
+     * @param options.showMe If true, logs the transmitted data (including prefix, hex format) to the console. Defaults to false.
+     * @param options.awaitData If true, waits for a data response from the device. Defaults to false.
+     * @param options.timeout The timeout in milliseconds to wait for a data response if `awaitData` is true. Defaults to 5000ms.
+     * @returns A promise that resolves with the Uint8Array data response if `awaitData` is true, or void otherwise.
+     * @throws Error if not connected, if TX characteristic is not available, or if the data payload is too large.
      */
     public async sendData(
         data: Uint8Array, // This is the application payload
@@ -398,7 +445,7 @@ export class FrameBle {
             timeout?: number;
         } = {}
     ): Promise<Uint8Array | void> { // Updated return type
-        const { showMe = false, awaitData = false, timeout = 5000 } = options;
+        const { showMe = false, awaitData = false, timeout = 5000 } = options; // Default values documented
 
         if (!this.txCharacteristic) {
             throw new Error("Not connected or TX characteristic not available.");
@@ -435,18 +482,38 @@ export class FrameBle {
         if (awaitData) return this.dataResponsePromise; // Returns Promise<Uint8Array>
     }
 
+    /**
+     * Sends a reset signal (0x04) to the Frame device.
+     * This typically causes the device to restart its Lua environment.
+     * @param showMe If true, logs the transmitted signal (hex format) to the console. Defaults to false.
+     * @returns A promise that resolves after a short delay post-transmission.
+     */
     public async sendResetSignal(showMe = false): Promise<void> {
         const signal = new Uint8Array([0x04]);
         await this.transmit(signal, showMe);
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 200)); // Short delay
     }
 
+    /**
+     * Sends a break signal (0x03) to the Frame device.
+     * This typically interrupts any currently running Lua script on the device.
+     * @param showMe If true, logs the transmitted signal (hex format) to the console. Defaults to false.
+     * @returns A promise that resolves after a short delay post-transmission.
+     */
     public async sendBreakSignal(showMe = false): Promise<void> {
         const signal = new Uint8Array([0x03]);
         await this.transmit(signal, showMe);
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 200)); // Short delay
     }
 
+    /**
+     * Uploads content to a file on the Frame device by sending Lua commands.
+     * The content is escaped and chunked to fit within payload limits.
+     * @param content The string content to write to the file.
+     * @param frameFilePath The path to the file on the Frame device. Defaults to "main.lua".
+     * @returns A promise that resolves when the file upload is complete.
+     * @throws Error if any step of the file upload process fails (e.g., opening file, writing chunk).
+     */
     public async uploadFileFromString(content: string, frameFilePath = "main.lua"): Promise<void> {
         let escapedContent = content.replace(/\r/g, "")
                                   .replace(/\\/g, "\\\\")
@@ -500,10 +567,27 @@ export class FrameBle {
         await this.sendLua("f:close();print(nil)", {awaitPrint: true});
     }
 
+    /**
+     * A convenience method that calls `uploadFileFromString`.
+     * Uploads file content to a specified path on the Frame device.
+     * @param fileContent The string content of the file to upload.
+     * @param frameFilePath The path on the Frame device where the file will be saved. Defaults to "main.lua".
+     * @returns A promise that resolves when the file upload is complete.
+     */
     public async uploadFile(fileContent: string, frameFilePath = "main.lua"): Promise<void> {
         await this.uploadFileFromString(fileContent, frameFilePath);
     }
 
+    /**
+     * Sends a multi-packet message to the device.
+     * This method handles chunking the payload and sending it in multiple BLE packets
+     * according to a specific protocol (message code, total size header, then data chunks).
+     * @param msgCode A number (0-255) representing the message type or command.
+     * @param payload The Uint8Array data to send as the message payload.
+     * @param showMe If true, logs details of each transmitted packet to the console. Defaults to false.
+     * @returns A promise that resolves when all parts of the message have been sent and acknowledged.
+     * @throws Error if msgCode is out of range, payload is too large, or if max payload size is too small for the protocol.
+     */
     public async sendMessage(msgCode: number, payload: Uint8Array, showMe = false): Promise<void> {
         const HEADER_SIZE = 2; // size_high(1), size_low(1)
         const MAX_TOTAL_PAYLOAD_SIZE = 65535;
